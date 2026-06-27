@@ -1,0 +1,1070 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sentinel — SecOps Control Plane</title>
+<style>
+  :root {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --border:    #21262d;
+    --muted:     #8b949e;
+    --text:      #c9d1d9;
+    --bright:    #e6edf3;
+    --amber:     #f0a500;
+    --amber-dim: #7a5200;
+    --green:     #3fb950;
+    --red:       #f85149;
+    --cyan:      #79c0ff;
+    --mono:      "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
+    --sans:      -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .logo {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--amber);
+    letter-spacing: 0.05em;
+  }
+  .logo span { color: var(--bright); }
+  .tagline {
+    font-size: 12px;
+    color: var(--muted);
+    border-left: 1px solid var(--border);
+    padding-left: 16px;
+  }
+  .status-dot {
+    margin-left: auto;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+  /* Phase-driven status light: glows while the agent works, amber while it
+     waits on the operator, steady on a finished run, grey when idle. */
+  .status-dot.working { background: var(--green); box-shadow: 0 0 8px var(--green); animation: dot-pulse 1.1s ease-in-out infinite; }
+  .status-dot.waiting { background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: dot-pulse 1.1s ease-in-out infinite; }
+  .status-dot.done    { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.error   { background: var(--red);   box-shadow: 0 0 6px var(--red); }
+  @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  /* ── Layout ── */
+  main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 24px 24px 60px;
+  }
+
+  /* ── Task input ── */
+  .task-bar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 28px;
+  }
+  .task-bar input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--bright);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .task-bar input:focus { border-color: var(--amber); }
+  .task-bar button {
+    background: var(--amber);
+    color: #000;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 20px;
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity 0.15s;
+  }
+  .task-bar button:hover { opacity: 0.85; }
+  .task-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .task-bar button.secondary {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+  }
+  .task-bar button.secondary:hover { color: var(--text); border-color: var(--muted); opacity: 1; }
+
+  /* ── Grid ── */
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto;
+    gap: 16px;
+  }
+  @media (max-width: 700px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  /* ── Panel ── */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .panel-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .panel-header .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--amber);
+    flex-shrink: 0;
+  }
+  .panel-body {
+    padding: 14px;
+    min-height: 120px;
+    max-height: 260px;
+    overflow-y: auto;
+  }
+  .panel-body::-webkit-scrollbar { width: 4px; }
+  .panel-body::-webkit-scrollbar-track { background: transparent; }
+  .panel-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* ── Plan steps ── */
+  .plan-list { list-style: none; }
+  .plan-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .plan-item:last-child { border-bottom: none; }
+  .step-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--amber);
+    min-width: 20px;
+    padding-top: 2px;
+  }
+
+  /* ── Observations feed ── */
+  .obs-item {
+    display: flex;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .obs-item:last-child { border-bottom: none; }
+  .obs-time {
+    font-family: var(--mono);
+    color: var(--muted);
+    white-space: nowrap;
+    font-size: 11px;
+    padding-top: 1px;
+  }
+  .obs-text { color: var(--text); word-break: break-word; flex: 1; min-width: 0; }
+
+  /* ── Tool call chips ── */
+  /* Observations = the agent's action trail, one row per tool call. */
+  .obs-step { font-family: var(--mono); font-size: 12px; color: var(--text);
+              flex: 1; min-width: 0; word-break: break-all; }
+  .obs-tool { color: var(--cyan); }
+  .obs-arg  { color: var(--muted); }
+  /* Console links point at the browser-reachable host, not the compose-network
+     name the agent navigated to; the displayed text keeps the original url. */
+  .obs-link { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--border); }
+  .obs-link:hover { color: var(--cyan); border-bottom-color: var(--cyan); }
+
+  /* ── Rendered markdown ── */
+  .md-p { margin: 0 0 8px; }
+  .md-p:last-child { margin-bottom: 0; }
+  .md-h { font-size: 13px; color: var(--bright); margin: 10px 0 6px; }
+  .md-ul, .md-ol { margin: 0 0 8px; padding-left: 20px; }
+  .md-ul li, .md-ol li { margin: 2px 0; }
+  .md-body code, .obs-text code {
+    font-family: var(--mono);
+    font-size: 0.92em;
+    color: var(--cyan);
+    background: rgba(121,192,255,0.08);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .md-pre {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px;
+    margin: 0 0 8px;
+    overflow-x: auto;
+  }
+  .md-pre code { background: none; color: var(--text); padding: 0; }
+  .md-table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0 0 8px;
+    font-size: 12px;
+  }
+  .md-table th, .md-table td {
+    border: 1px solid var(--border);
+    padding: 5px 9px;
+    text-align: left;
+    vertical-align: top;
+    /* Override the container's break-word so single words (option names,
+       verdicts) never split mid-word; cells still wrap at spaces. */
+    word-break: normal;
+    overflow-wrap: normal;
+  }
+  /* The first column holds short labels (option / field names) that should
+     stay on one line regardless of viewport width. */
+  .md-table th:first-child, .md-table td:first-child { white-space: nowrap; }
+  .md-table th { color: var(--muted); background: rgba(255,255,255,0.02); font-weight: 600; }
+  .hl { color: var(--cyan); font-style: normal; }
+
+  /* ── KPI strip ── */
+  .kpi-strip {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .kpi {
+    flex: 1;
+    background: var(--surface);
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .kpi-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .kpi-value {
+    font-family: var(--mono);
+    font-size: 22px;
+    color: var(--bright);
+    font-weight: 500;
+  }
+  .kpi-unit {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .kpi-trace {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--cyan);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .kpi-trace:hover { text-decoration: underline; }
+  .kpi-trace-pending {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* ── Approval card ── */
+  .approval-card {
+    grid-column: 1 / -1;
+    background: #1a1100;
+    border: 2px solid var(--amber);
+    border-radius: 10px;
+    padding: 24px;
+    box-shadow: 0 0 32px rgba(240, 165, 0, 0.12);
+  }
+  .approval-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .approval-badge {
+    background: var(--amber);
+    color: #000;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 4px;
+  }
+  .approval-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--bright);
+  }
+  .risk-badge {
+    margin-left: auto;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .risk-high   { background: rgba(248,81,73,0.15); color: var(--red); border: 1px solid rgba(248,81,73,0.3); }
+  .risk-medium { background: rgba(240,165,0,0.15); color: var(--amber); border: 1px solid rgba(240,165,0,0.3); }
+  .risk-low    { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+
+  .action-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  @media (max-width: 600px) { .action-grid { grid-template-columns: 1fr; } }
+  .action-field label {
+    display: block;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .action-field .field-val {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--cyan);
+    background: rgba(121,192,255,0.06);
+    padding: 8px 10px;
+    border-radius: 4px;
+    border: 1px solid rgba(121,192,255,0.12);
+    word-break: break-all;
+  }
+  .field-val a { color: var(--cyan); text-decoration: none; }
+  .field-val a:hover { text-decoration: underline; }
+
+  .evidence-block {
+    margin-bottom: 24px;
+  }
+  .evidence-block label {
+    display: block;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .evidence-text {
+    font-size: 13px;
+    color: var(--text);
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+    word-break: break-word;
+    line-height: 1.6;
+  }
+
+  .approval-actions {
+    display: flex;
+    gap: 12px;
+  }
+  .btn-approve, .btn-reject {
+    flex: 1;
+    padding: 13px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.03em;
+    transition: opacity 0.15s, transform 0.1s;
+  }
+  .btn-approve:active, .btn-reject:active { transform: scale(0.98); }
+  .btn-approve {
+    background: var(--green);
+    color: #000;
+  }
+  .btn-approve:hover { opacity: 0.85; }
+  .btn-reject {
+    background: transparent;
+    color: var(--red);
+    border: 1px solid rgba(248,81,73,0.4);
+  }
+  .btn-reject:hover { background: rgba(248,81,73,0.1); }
+  .btn-approve:disabled, .btn-reject:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* Active button keeps full visibility while work is in flight (the execute
+     path is synchronous and takes a few seconds); pointer-events block re-click. */
+  .btn-approve.btn-working, .btn-reject.btn-working {
+    opacity: 1; cursor: progress; pointer-events: none;
+    display: flex; align-items: center; justify-content: center; gap: 4px;
+  }
+  .btn-working .spinner { margin-right: 0; }
+  .btn-approve.btn-working .spinner { border-color: rgba(0,0,0,0.25); border-top-color: #000; }
+
+  /* ── Outcome panel ── */
+  .outcome-card {
+    grid-column: 1 / -1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+  }
+  .outcome-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .outcome-status {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: 4px;
+  }
+  .status-resolved { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+  .status-aborted  { background: rgba(248,81,73,0.1);  color: var(--red);   border: 1px solid rgba(248,81,73,0.3); }
+  .status-failed   { background: rgba(248,81,73,0.1);  color: var(--red);   border: 1px solid rgba(248,81,73,0.3); }
+  .outcome-summary {
+    font-size: 14px;
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  /* ── Empty / loading states ── */
+  .empty {
+    color: var(--muted);
+    font-size: 12px;
+    font-style: italic;
+    padding: 16px 0;
+  }
+  .spinner {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--border);
+    border-top-color: var(--amber);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Status banner ── */
+  .run-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 20px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .run-status .tid {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .phase-badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .phase-investigating { background: rgba(121,192,255,0.1); color: var(--cyan); }
+  .phase-awaiting_approval { background: rgba(240,165,0,0.15); color: var(--amber); }
+  .phase-executing  { background: rgba(63,185,80,0.1); color: var(--green); }
+  .phase-resolved   { background: rgba(63,185,80,0.15); color: var(--green); }
+  .phase-aborted    { background: rgba(248,81,73,0.1); color: var(--red); }
+  .phase-failed     { background: rgba(248,81,73,0.1); color: var(--red); }
+  .phase-unknown    { background: rgba(139,148,158,0.1); color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">SENTINEL<span>.</span></div>
+  <div class="tagline">SecOps Autonomous Investigation &amp; Response</div>
+  <div class="status-dot" id="liveDot"></div>
+</header>
+
+<main>
+  <div class="task-bar">
+    <input type="text" id="taskInput" placeholder="Describe the alert or incident..." value="Triage alert #1407">
+    <button id="runBtn" onclick="startRun()">Run investigation</button>
+    <button id="resetBtn" class="secondary" onclick="resetDemo()">Reset demo</button>
+  </div>
+
+  <div id="runMeta" style="display:none">
+    <div class="run-status">
+      <span>Thread</span>
+      <span class="tid" id="tidDisplay"></span>
+      <span class="phase-badge phase-unknown" id="phaseBadge">—</span>
+      <span id="pollingIndicator"></span>
+    </div>
+  </div>
+
+  <div class="grid" id="mainGrid" style="display:none">
+    <!-- Plan -->
+    <div class="panel">
+      <div class="panel-header"><span class="dot"></span>Investigation Plan</div>
+      <div class="panel-body" id="planBody">
+        <div class="empty">No plan yet.</div>
+      </div>
+    </div>
+
+    <!-- Observations -->
+    <div class="panel">
+      <div class="panel-header"><span class="dot"></span>Observations</div>
+      <div class="panel-body" id="obsBody">
+        <div class="empty">Waiting for data...</div>
+      </div>
+    </div>
+
+    <!-- KPI strip -->
+    <div class="kpi-strip">
+      <div class="kpi">
+        <div class="kpi-label">Input tokens</div>
+        <div class="kpi-value" id="kpiInputTok">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Output tokens</div>
+        <div class="kpi-value" id="kpiOutputTok">—</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Est. cost</div>
+        <div><span class="kpi-value" id="kpiCost">—</span> <span class="kpi-unit">USD</span></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Processing time</div>
+        <div><span class="kpi-value" id="kpiLatency">—</span> <span class="kpi-unit">secs</span></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Turns</div>
+        <div class="kpi-value" id="kpiTurns">—</div>
+      </div>
+      <div class="kpi" id="kpiTraceCell" style="display:none">
+        <div class="kpi-label">Observability</div>
+        <a class="kpi-trace" id="kpiTraceLink" target="_blank" rel="noopener" style="display:none">LangSmith ↗</a>
+        <span class="kpi-trace-pending" id="kpiTracePending">trace pending…</span>
+      </div>
+    </div>
+
+    <!-- Approval card (hidden until status == awaiting_approval) -->
+    <div class="approval-card" id="approvalCard" style="display:none">
+      <div class="approval-header">
+        <div class="approval-badge">Awaiting Approval</div>
+        <div class="approval-title">Proposed Remediation Action</div>
+        <div class="risk-badge risk-high" id="riskBadge">High Risk</div>
+      </div>
+      <div class="action-grid">
+        <div class="action-field">
+          <label>Action type</label>
+          <div class="field-val" id="actionType">—</div>
+        </div>
+        <div class="action-field">
+          <label>Target</label>
+          <div class="field-val" id="actionTarget">—</div>
+        </div>
+      </div>
+      <div class="evidence-block">
+        <label>Evidence</label>
+        <div class="evidence-text md-body" id="actionEvidence">—</div>
+      </div>
+      <div class="approval-actions">
+        <button class="btn-approve" id="approveBtn" onclick="sendDecision('approve')">Approve &amp; Execute</button>
+        <button class="btn-reject" id="rejectBtn" onclick="sendDecision('reject')">Reject</button>
+      </div>
+    </div>
+
+    <!-- Outcome (hidden until terminal status) -->
+    <div class="outcome-card" id="outcomeCard" style="display:none">
+      <div class="outcome-header">
+        <div class="outcome-status" id="outcomeStatus">resolved</div>
+        <div style="font-size:13px;color:var(--muted)" id="outcomeCaption">Incident closed</div>
+      </div>
+      <div class="outcome-summary" id="outcomeSummary"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+  let currentTid = null;
+  let pollTimer  = null;
+  let obsCounter = 0;
+
+  const $ = id => document.getElementById(id);
+
+  // ── Runtime config (console host rewrite + LangSmith link) ──
+  let appCfg = null;
+  async function loadConfig() {
+    // Refetch while LangSmith is enabled but its trace base has not resolved yet
+    // (a fresh project does not exist until its first run is traced).
+    const unresolved = appCfg && appCfg.langsmith &&
+      appCfg.langsmith.enabled && !appCfg.langsmith.base;
+    if (appCfg && !unresolved) return appCfg;
+    try { appCfg = await (await fetch('/api/config')).json(); }
+    catch (e) { appCfg = appCfg || {}; }
+    return appCfg;
+  }
+
+  // Rewrite a console url from the agent's compose-network host to the
+  // browser-reachable one. Non-matching urls pass through unchanged.
+  function toPublicUrl(u) {
+    const c = appCfg && appCfg.console;
+    if (c && c.internal && u.startsWith(c.internal)) return c.public + u.slice(c.internal.length);
+    return u;
+  }
+
+  async function updateTraceLink(tid) {
+    const cell = $('kpiTraceCell');
+    const cfg = await loadConfig();
+    const ls = (cfg && cfg.langsmith) || {};
+    if (!ls.enabled) { cell.style.display = 'none'; return; }
+    cell.style.display = '';
+    const link = $('kpiTraceLink'), pending = $('kpiTracePending');
+    if (ls.base && tid) {
+      link.href = ls.base + '/t/' + encodeURIComponent(tid);
+      link.style.display = ''; pending.style.display = 'none';
+    } else {
+      link.style.display = 'none'; pending.style.display = '';
+    }
+  }
+
+  const PAUSED   = s => s === 'awaiting_approval';
+  const TERMINAL = s => s === 'resolved' || s === 'aborted' || s === 'failed';
+
+  // ── Minimal markdown renderer (offline, no dependency) ──
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function mdInline(s) {
+    return s
+      .replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`)
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+      .replace(/\b(CVE-[0-9-]+|(?:\d{1,3}\.){3}\d{1,3}|[A-Z0-9][A-Z0-9_\-]{3,})\b/g,
+               '<span class="hl">$1</span>');
+  }
+  function mdToHtml(src) {
+    if (src == null || src === '') return '';
+    const lines = escapeHtml(src).replace(/\r/g, '').split('\n');
+    const isRow = l => /^\s*\|.*\|\s*$/.test(l);
+    const cells = l => l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+    const isSep = l => isRow(l) && cells(l).every(c => /^:?-+:?$/.test(c));
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (/^\s*$/.test(line)) { i++; continue; }
+
+      if (/^\s*```/.test(line)) {                       // fenced code
+        const buf = []; i++;
+        while (i < lines.length && !/^\s*```/.test(lines[i])) { buf.push(lines[i]); i++; }
+        i++;
+        out.push(`<pre class="md-pre"><code>${buf.join('\n')}</code></pre>`);
+        continue;
+      }
+      if (isRow(line) && i + 1 < lines.length && isSep(lines[i + 1])) {   // table
+        const head = cells(line); i += 2; const body = [];
+        while (i < lines.length && isRow(lines[i])) { body.push(cells(lines[i])); i++; }
+        out.push('<table class="md-table"><thead><tr>' +
+          head.map(c => `<th>${mdInline(c)}</th>`).join('') + '</tr></thead><tbody>' +
+          body.map(r => '<tr>' + r.map(c => `<td>${mdInline(c)}</td>`).join('') + '</tr>').join('') +
+          '</tbody></table>');
+        continue;
+      }
+      const h = line.match(/^\s*(#{1,6})\s+(.*)$/);      // heading
+      if (h) { out.push(`<div class="md-h">${mdInline(h[2])}</div>`); i++; continue; }
+
+      if (/^\s*[-*+]\s+/.test(line)) {                   // unordered list
+        const items = [];
+        while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+          items.push(`<li>${mdInline(lines[i].replace(/^\s*[-*+]\s+/, ''))}</li>`); i++;
+        }
+        out.push(`<ul class="md-ul">${items.join('')}</ul>`); continue;
+      }
+      if (/^\s*\d+\.\s+/.test(line)) {                   // ordered list
+        const items = [];
+        while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+          items.push(`<li>${mdInline(lines[i].replace(/^\s*\d+\.\s+/, ''))}</li>`); i++;
+        }
+        out.push(`<ol class="md-ol">${items.join('')}</ol>`); continue;
+      }
+      const para = [];                                   // paragraph
+      const isBlockStart = idx => {
+        const l = lines[idx];
+        return /^\s*$/.test(l) || /^\s*```/.test(l) || /^\s*#{1,6}\s+/.test(l) ||
+          /^\s*[-*+]\s+/.test(l) || /^\s*\d+\.\s+/.test(l) ||
+          (isRow(l) && idx + 1 < lines.length && isSep(lines[idx + 1]));
+      };
+      while (i < lines.length && !isBlockStart(i)) { para.push(lines[i]); i++; }
+      out.push(`<p class="md-p">${para.map(mdInline).join('<br>')}</p>`);
+    }
+    return out.join('');
+  }
+
+  function fmt(val, decimals = 2) {
+    if (val == null || val === '') return '—';
+    if (typeof val === 'number') return decimals === 0 ? val.toLocaleString() : val.toFixed(decimals);
+    return String(val);
+  }
+
+  function setDot(state) {
+    const dot = $('liveDot');
+    const titles = { working: 'Agent running', waiting: 'Awaiting your approval',
+                     done: 'Incident resolved', error: 'Run aborted', idle: 'Idle' };
+    dot.className = 'status-dot' + (state && state !== 'idle' ? ' ' + state : '');
+    dot.title = titles[state] || 'Idle';
+  }
+
+  function dotForStatus(status) {
+    if (status === 'awaiting_approval') return 'waiting';
+    if (status === 'resolved') return 'done';
+    if (status === 'aborted' || status === 'failed') return 'error';
+    return 'working';  // investigating / executing / in-flight
+  }
+
+  function setBadge(status) {
+    const el = $('phaseBadge');
+    const known = ['investigating','awaiting_approval','executing','resolved','aborted','failed'];
+    const cls   = known.includes(status) ? status : 'unknown';
+    el.className = 'phase-badge phase-' + cls;
+    el.textContent = (status || '—').replace(/_/g, ' ');
+  }
+
+  function renderPlan(plan) {
+    if (!plan || plan.length === 0) {
+      $('planBody').innerHTML = '<div class="empty">No plan yet.</div>';
+      return;
+    }
+    const items = plan.map((step, i) =>
+      `<li class="plan-item"><span class="step-num">${i + 1}</span><span>${step}</span></li>`
+    ).join('');
+    $('planBody').innerHTML = `<ul class="plan-list">${items}</ul>`;
+  }
+
+  function renderObs(observations) {
+    if (!observations || observations.length === 0) {
+      if (obsCounter === 0) $('obsBody').innerHTML = '<div class="empty">Waiting for data...</div>';
+      return;
+    }
+    // This pane is the agent's action trail (which pages it drove), not the
+    // write-up: the full investigation summary lives in the approval card's
+    // Evidence block. Flatten tool calls across observations into steps.
+    const steps = [];
+    observations.forEach(obs => {
+      (((typeof obs === 'object' && obs.tool_calls) || [])).forEach(c => steps.push(c));
+    });
+    // only re-render when the trail grows (avoids clobbering text selection)
+    if (steps.length === obsCounter) return;
+    obsCounter = steps.length;
+    if (steps.length === 0) {
+      $('obsBody').innerHTML = '<div class="empty">No tool activity recorded.</div>';
+      return;
+    }
+    const items = steps.map((c, i) => {
+      const name = (c.name || '').replace(/^mcp__playwright__/, '').replace(/^browser_/, '');
+      const inp = c.input || {};
+      // Omit the ToolSearch query (a long tool-id blob); keep useful args like URLs.
+      const arg = inp.url || inp.ref || inp.element || inp.selector || '';
+      // Console urls become links to the browser-reachable host; the visible
+      // text keeps the original (compose-network) url. Other args stay plain.
+      const argHtml = /^https?:\/\//i.test(arg)
+        ? `<a class="obs-link" href="${escapeHtml(toPublicUrl(String(arg)))}" target="_blank" rel="noopener">${escapeHtml(String(arg))}</a>`
+        : (arg ? `<span class="obs-arg">${escapeHtml(String(arg))}</span>` : '');
+      return `<div class="obs-item">
+        <span class="obs-time">${String(i + 1).padStart(2, '0')}</span>
+        <span class="obs-step"><span class="obs-tool">${escapeHtml(name)}</span>` +
+          (argHtml ? ` ${argHtml}` : '') + `</span>
+      </div>`;
+    }).join('');
+    $('obsBody').innerHTML = items;
+    $('obsBody').scrollTop = $('obsBody').scrollHeight;
+  }
+
+  function renderKpis(kpis) {
+    kpis = kpis || {};
+    $('kpiInputTok').textContent  = kpis.input_tokens  != null ? kpis.input_tokens.toLocaleString()  : '—';
+    $('kpiOutputTok').textContent = kpis.output_tokens != null ? kpis.output_tokens.toLocaleString() : '—';
+    $('kpiCost').textContent      = kpis.cost_usd      != null ? '$' + kpis.cost_usd.toFixed(4)      : '—';
+    $('kpiLatency').textContent   = kpis.latency_ms    != null ? (kpis.latency_ms / 1000).toFixed(2)  : '—';
+    $('kpiTurns').textContent     = kpis.turns         != null ? kpis.turns                           : '—';
+  }
+
+  function inferRisk(actionType) {
+    const t = (actionType || '').toLowerCase();
+    if (t.includes('quarantine') || t.includes('isolate') || t.includes('block') || t.includes('terminate'))
+      return 'high';
+    if (t.includes('disable') || t.includes('revoke') || t.includes('reset'))
+      return 'medium';
+    return 'low';
+  }
+
+  function showApproval(proposed) {
+    proposed = proposed || {};
+    const type   = proposed.type   || '—';
+    const target = proposed.target || proposed.host || '—';
+    const ev     = proposed.evidence || '(no evidence recorded)';
+    const risk   = inferRisk(type);
+
+    $('actionType').textContent = type.replace(/_/g, ' ');
+    // The target is the console asset url; link it to the browser-reachable host
+    // (text keeps the original url), matching the Observations feed.
+    if (/^https?:\/\//i.test(target)) {
+      $('actionTarget').innerHTML =
+        `<a href="${escapeHtml(toPublicUrl(target))}" target="_blank" rel="noopener">${escapeHtml(target)}</a>`;
+    } else {
+      $('actionTarget').textContent = target;
+    }
+    $('actionEvidence').innerHTML = mdToHtml(
+      typeof ev === 'object' ? '```\n' + JSON.stringify(ev, null, 2) + '\n```' : ev);
+
+    const riskEl = $('riskBadge');
+    riskEl.className = 'risk-badge risk-' + risk;
+    riskEl.textContent = risk.charAt(0).toUpperCase() + risk.slice(1) + ' Risk';
+
+    $('approvalCard').style.display = '';
+    $('outcomeCard').style.display  = 'none';
+    // Reset the buttons (a prior run may have left one in the working state).
+    const ab = $('approveBtn'), rb = $('rejectBtn');
+    ab.classList.remove('btn-working'); rb.classList.remove('btn-working');
+    ab.disabled = false; rb.disabled = false;
+    ab.innerHTML = 'Approve &amp; Execute';
+    rb.innerHTML = 'Reject';
+  }
+
+  function showOutcome(status, summary) {
+    $('approvalCard').style.display = 'none';
+    const outcomeEl = $('outcomeCard');
+    outcomeEl.style.display = '';
+
+    const statusEl = $('outcomeStatus');
+    statusEl.className = 'outcome-status status-' + (status || 'resolved');
+    statusEl.textContent = (status || 'resolved').replace(/_/g, ' ');
+    const captions = { failed: 'Run failed', aborted: 'Run aborted' };
+    $('outcomeCaption').textContent = captions[status] || 'Incident closed';
+    $('outcomeSummary').textContent = summary || 'Investigation complete.';
+  }
+
+  function applyState(state) {
+    const status = state.status || 'unknown';
+    setBadge(status);
+    setDot(dotForStatus(status));
+    renderPlan(state.plan);
+    renderObs(state.observations);
+    renderKpis(state.kpis);
+    updateTraceLink(currentTid);
+
+    if (status === 'awaiting_approval') {
+      showApproval(state.proposed_action);
+    } else if (status === 'resolved' || status === 'aborted' || status === 'failed') {
+      showOutcome(status, status === 'failed'
+        ? (state.error || state.incident_summary || 'Run failed.')
+        : state.incident_summary);
+    } else {
+      $('approvalCard').style.display = 'none';
+      $('outcomeCard').style.display  = 'none';
+    }
+
+    return status;
+  }
+
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    // The dot reflects run phase (set by applyState), not the poll timer, so it
+    // is intentionally not reset here.
+    $('pollingIndicator').innerHTML = '';
+  }
+
+  function showRunLost(detail) {
+    stopPolling();
+    setDot('error');
+    setBadge('failed');
+    showOutcome('failed', detail);
+  }
+
+  async function poll() {
+    if (!currentTid) return null;
+    try {
+      const res = await fetch(`/api/runs/${currentTid}`);
+      if (!res.ok) {
+        showRunLost('Lost contact with the run (HTTP ' + res.status + ').');
+        return 'failed';
+      }
+      const state = await res.json();
+      const status = applyState(state);
+      // awaiting_approval is a hard pause: the graph is interrupted waiting on
+      // the operator, so server state cannot change until they decide. Stop
+      // polling so the page stops rewriting the DOM and wiping text selection.
+      if (TERMINAL(status) || PAUSED(status)) stopPolling();
+      return status;
+    } catch (e) {
+      showRunLost('Lost contact with the run.');
+      return 'failed';
+    }
+  }
+
+  async function startRun() {
+    const task = $('taskInput').value.trim();
+    if (!task) return;
+
+    $('runBtn').disabled = true;
+    $('runBtn').innerHTML = '<span class="spinner"></span>Starting...';
+    obsCounter = 0;
+
+    try {
+      const res = await fetch('/api/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task }),
+      });
+      if (!res.ok) throw new Error('Failed to start run: ' + res.status);
+      const { thread_id } = await res.json();
+
+      currentTid = thread_id;
+      $('tidDisplay').textContent = thread_id;
+      $('runMeta').style.display = '';
+      $('mainGrid').style.display = '';
+      $('approvalCard').style.display = 'none';
+      $('outcomeCard').style.display  = 'none';
+
+      setDot('working');
+      $('pollingIndicator').innerHTML = '<span class="spinner"></span>';
+      const status = await poll();
+      if (status && !TERMINAL(status) && !PAUSED(status)) {
+        pollTimer = setInterval(poll, 1500);
+      }
+    } catch (e) {
+      alert('Error: ' + e.message);
+    } finally {
+      $('runBtn').disabled = false;
+      $('runBtn').textContent = 'Run investigation';
+    }
+  }
+
+  async function sendDecision(decision) {
+    if (!currentTid) return;
+    const approve = decision === 'approve';
+    const btn   = $(approve ? 'approveBtn' : 'rejectBtn');
+    const other = $(approve ? 'rejectBtn' : 'approveBtn');
+    const original = btn.innerHTML;
+
+    // In-place feedback: the execute path runs synchronously and can take a few
+    // seconds, so put the active work on the clicked button and flip the phase.
+    btn.classList.add('btn-working');
+    btn.innerHTML = '<span class="spinner"></span>' +
+      (approve ? 'Executing remediation…' : 'Aborting…');
+    other.disabled = true;
+    if (approve) setBadge('executing');
+    $('pollingIndicator').innerHTML = '<span class="spinner"></span>';
+    setDot('working');
+
+    try {
+      const res = await fetch(`/api/runs/${currentTid}/decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision }),
+      });
+      if (!res.ok) throw new Error('Decision request failed: ' + res.status);
+      const state = await res.json();
+      const status = applyState(state);
+      if (TERMINAL(status) || PAUSED(status)) {
+        stopPolling();
+      } else if (!pollTimer) {
+        setDot('working');
+        $('pollingIndicator').innerHTML = '<span class="spinner"></span>';
+        pollTimer = setInterval(poll, 1500);
+      }
+    } catch (e) {
+      alert('Error: ' + e.message);
+      btn.classList.remove('btn-working');
+      btn.innerHTML = original;
+      other.disabled = false;
+      setBadge('awaiting_approval');
+    }
+  }
+
+  // Reseed the mock console and return the dashboard to its idle state so the
+  // next demo starts clean without restarting any container.
+  async function resetDemo() {
+    const btn = $('resetBtn');
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/reset', { method: 'POST' });
+      if (!res.ok) throw new Error('Reset failed: ' + res.status);
+      stopPolling();
+      currentTid = null;
+      obsCounter = 0;
+      $('runMeta').style.display = 'none';
+      $('mainGrid').style.display = 'none';
+      $('approvalCard').style.display = 'none';
+      $('outcomeCard').style.display = 'none';
+      setDot('idle');
+    } catch (e) {
+      alert('Error: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // Prime console-rewrite config and trace-cell visibility before any run.
+  loadConfig();
+</script>
+</body>
+</html>

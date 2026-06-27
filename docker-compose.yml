@@ -1,0 +1,33 @@
+services:
+  playwright-mcp:
+    image: mcr.microsoft.com/playwright/mcp
+    # --allowed-hosts is required: the server has DNS-rebinding protection that
+    # rejects requests whose Host header is not the bound host. The app reaches
+    # it over the compose network as playwright-mcp:8931, so that Host must be
+    # allowed or every MCP request 403s and the agent silently gets no tools.
+    command: ["--port", "8931", "--host", "0.0.0.0", "--headless",
+              "--allowed-hosts", "playwright-mcp:8931,localhost:8931"]
+    ports: ["8931:8931"]
+
+  soc-console:
+    build: { context: ., dockerfile: soc_console/Dockerfile }
+    ports: ["8000:8000"]
+
+  grafana:
+    image: grafana/grafana-oss
+    # Only used when SENTINEL_ADAPTER=grafana. Gated behind a compose profile so
+    # a default run does not start an unused container. Enable with
+    # `docker compose --profile grafana up`.
+    profiles: ["grafana"]
+    ports: ["3000:3000"]
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+
+  app:
+    build: { context: ., dockerfile: app/Dockerfile }
+    env_file: .env
+    environment:
+      SENTINEL_CONSOLE_BASE_URL: http://soc-console:8000
+      SENTINEL_PLAYWRIGHT_MCP_URL: http://playwright-mcp:8931/mcp
+    ports: ["9000:9000"]
+    depends_on: [playwright-mcp, soc-console]

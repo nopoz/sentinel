@@ -1,0 +1,30 @@
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local data / state
+*.sqlite
+*.db
+
+# OS / editor / tool dotfiles
+.DS_Store
+.*.swp
+
+# Local tool and assistant state: ignore every dot-directory (editor, cache,
+# agent tooling, MCP scratch). Re-include one with a negation if it must be
+# tracked, e.g. !.github/
+.*/
+
+# Local design scratch (kept on disk, out of the repo)
+docs/superpowers/

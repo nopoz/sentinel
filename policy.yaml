@@ -1,0 +1,12 @@
+actions:
+  navigate: { class: read, require_approval: false }
+  snapshot: { class: read, require_approval: false }
+  screenshot: { class: read, require_approval: false }
+  escalate: { class: escalate, require_approval: false }
+  quarantine_host: { class: write, require_approval: true }
+  block_ip: { class: write, require_approval: true }
+  resolve_incident: { class: write, require_approval: true }
+  silence_alert: { class: write, require_approval: true }
+default:
+  class: write
+  require_approval: true
